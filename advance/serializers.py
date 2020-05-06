@@ -1,3 +1,6 @@
+from rest_framework.serializers import raise_errors_on_nested_writes
+from rest_framework.utils import model_meta
+
 from .models import Client, Category, Department, Unit, Project, Site, Requisition, RequisitionDetail
 from django.contrib.auth.models import User
 from rest_framework import serializers
@@ -51,6 +54,15 @@ class SiteSerializer(serializers.ModelSerializer):
 
 
 class RequisitionDetailSerializer(serializers.ModelSerializer):
+    category = CategorySerializer(many=False)
+    unit = UnitSerializer(many=False)
+
+    class Meta:
+        fields = '__all__'
+        model = RequisitionDetail
+
+
+class RequisitionDetailCreateSerializer(serializers.ModelSerializer):
     class Meta:
         fields = '__all__'
         model = RequisitionDetail
@@ -66,17 +78,8 @@ class RequisitionSerializer(serializers.ModelSerializer):
         model = Requisition
 
 
-class RequisitionTeamAddEditSerializer(serializers.ModelSerializer):
-    id = serializers.IntegerField()
-
-    class Meta:
-        model = User
-        fields = ['id']
-
-
-class RequisitionCreateUpdateSerializer(serializers.ModelSerializer):
-    detail = RequisitionDetailSerializer(many=True)
-    # team = RequisitionTeamAddEditSerializer(many=True)
+class RequisitionCreateSerializer(serializers.ModelSerializer):
+    detail = RequisitionDetailCreateSerializer(many=True)
 
     class Meta:
         model = Requisition
@@ -92,3 +95,38 @@ class RequisitionCreateUpdateSerializer(serializers.ModelSerializer):
             details_list.append(RequisitionDetail(requistion=requisition, **detail))
         RequisitionDetail.objects.bulk_create(details_list)
         return requisition
+
+
+class RequisitionDetailUpdateSerializer(serializers.ModelSerializer):
+    id = serializers.IntegerField(required=False)
+
+    class Meta:
+        fields = '__all__'
+        model = RequisitionDetail
+
+
+class RequisitionUpdateSerializer(serializers.ModelSerializer):
+    detail = RequisitionDetailUpdateSerializer(many=True)
+
+    class Meta:
+        model = Requisition
+        fields = ('id', 'site', 'team', 'working_date', 'payment_method', 'description', 'detail')
+
+    def update(self, instance, validated_data):
+        details = validated_data.pop('detail')
+        team = validated_data.pop('team')
+        for (k, v) in validated_data.items():
+            setattr(instance, k, v)
+        instance.save()
+        # Delete then Insert M2M
+        instance.team.clear()
+        instance.team.add(*team)
+        # Update and create Child Model
+        update = []
+        create = []
+        for detail in details:
+            update.append(detail) if detail.get('id', None) else create.append(detail)
+            obj, created = RequisitionDetail.objects.update_or_create(
+                pk=detail.get('id'), requistion=instance, defaults={**detail}
+            )
+        return instance
